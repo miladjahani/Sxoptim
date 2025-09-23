@@ -26,6 +26,10 @@
         <aside class="w-72 bg-gray-900 p-4 overflow-y-auto shrink-0">
             <div class="flex items-center mb-6"><i class="fas fa-cogs text-3xl text-blue-400 mr-3"></i><h1 class="text-xl font-bold text-white">SimSXCu Web</h1></div>
             <nav id="scenario-nav"><h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">پیکربندی‌ها</h2></nav>
+            <div class="mt-auto text-center text-xs text-gray-500 py-4">
+                <p>طراحی شده توسط</p>
+                <p class="font-bold">میلاد جهانی</p>
+            </div>
         </aside>
 
         <main class="flex-1 flex flex-col bg-gray-800 overflow-hidden">
@@ -61,13 +65,17 @@
                             <div id="mccabe-thiele-chart" class="w-full h-full"></div>
                         </div>
                     </div>
+                    <div id="recommendations-container" class="glass-card p-6 rounded-lg mt-6 hidden">
+                        <div class="flex items-center mb-4"><i class="fas fa-lightbulb text-yellow-400 mr-3"></i><h3 class="text-lg font-semibold">توصیه‌های هوشمند</h3></div>
+                        <ul id="recommendations-list" class="space-y-2 text-gray-300"></ul>
+                    </div>
                 </div>
             </div>
         </main>
     </div>
 
     <script>
-        const dom = { nav: document.getElementById('scenario-nav'), title: document.getElementById('main-title'), welcome: document.getElementById('welcome-screen'), dashboard: document.getElementById('simulation-dashboard'), tabs: document.getElementById('options-tabs'), inputs: document.getElementById('input-fields'), runBtn: document.getElementById('run-simulation-btn'), btnText: document.getElementById('btn-text'), spinner: document.getElementById('loading-spinner'), resultsArea: document.getElementById('results-area'), resultsContainer: document.getElementById('results-container'), chart: document.getElementById('mccabe-thiele-chart'), status: { dot: document.getElementById('status-dot'), text: document.getElementById('status-text') } };
+        const dom = { nav: document.getElementById('scenario-nav'), title: document.getElementById('main-title'), welcome: document.getElementById('welcome-screen'), dashboard: document.getElementById('simulation-dashboard'), tabs: document.getElementById('options-tabs'), inputs: document.getElementById('input-fields'), runBtn: document.getElementById('run-simulation-btn'), btnText: document.getElementById('btn-text'), spinner: document.getElementById('loading-spinner'), resultsArea: document.getElementById('results-area'), resultsContainer: document.getElementById('results-container'), chart: document.getElementById('mccabe-thiele-chart'), recommendationsContainer: document.getElementById('recommendations-container'), recommendationsList: document.getElementById('recommendations-list'), status: { dot: document.getElementById('status-dot'), text: document.getElementById('status-text') } };
         let activeScenario, activeOption;
         let pyodide, runSimulationPython;
 
@@ -203,6 +211,7 @@
                 dom.inputs.innerHTML += fieldHTML;
             });
             dom.resultsArea.classList.add('hidden');
+            dom.recommendationsContainer.classList.add('hidden');
         }
         async function handleRunSimulation() {
             dom.btnText.textContent = 'در حال محاسبه...'; dom.spinner.classList.remove('hidden'); dom.runBtn.disabled = true;
@@ -223,14 +232,32 @@
                 setEngineStatus(true, 'موتور شبیه‌ساز آماده است');
             }
         }
-        function displayResults({ results, chartData }) {
+        function displayResults({ results, chartData, recommendations }) {
             dom.resultsContainer.innerHTML = '';
             results.forEach(item => {
                 const icon = item.label.includes('راندمان') ? 'fa-percent' : item.label.includes('ظرفیت') ? 'fa-battery-full' : 'fa-chart-line';
                 const card = `<div class="glass-card flex justify-between items-center p-4 rounded-lg"><div><p class="text-sm text-gray-400">${item.label}</p><p class="text-2xl font-bold text-white">${item.value} <span class="text-base font-normal text-gray-300">${item.unit}</span></p></div><div class="bg-blue-500/20 text-blue-300 rounded-full h-10 w-10 flex items-center justify-center"><i class="fas ${icon}"></i></div></div>`;
                 dom.resultsContainer.innerHTML += card;
             });
-            drawChart(chartData); dom.resultsArea.classList.remove('hidden');
+
+            dom.recommendationsList.innerHTML = '';
+            if (recommendations && recommendations.length > 0) {
+                recommendations.forEach(rec => {
+                    const li = document.createElement('li');
+                    li.textContent = rec;
+                    li.className = 'flex items-center';
+                    const icon = document.createElement('i');
+                    icon.className = 'fas fa-check-circle text-green-400 ml-3';
+                    li.prepend(icon);
+                    dom.recommendationsList.appendChild(li);
+                });
+                dom.recommendationsContainer.classList.remove('hidden');
+            } else {
+                dom.recommendationsContainer.classList.add('hidden');
+            }
+
+            drawChart(chartData);
+            dom.resultsArea.classList.remove('hidden');
         }
         function drawChart(data) {
             const layout = { title: 'نمودار مک‌کیب-تیل', paper_bgcolor: 'transparent', plot_bgcolor: 'rgba(255, 255, 255, 0.05)', font: { family: 'Vazirmatn, sans-serif', color: '#e2e8f0' }, xaxis: { title: 'غلظت مس در فاز آبی (g/L)', gridcolor: 'rgba(255, 255, 255, 0.1)' }, yaxis: { title: 'غلظت مس در فاز آلی (g/L)', gridcolor: 'rgba(255, 255, 255, 0.1)' }, legend: { x: 0.05, y: 0.95, bgcolor: 'rgba(0,0,0,0.3)'}, margin: { l: 60, r: 30, b: 50, t: 50 } };
