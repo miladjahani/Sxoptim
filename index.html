@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SimSXCu Web Simulator - Digital Twin</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700&display=swap');
+        body { font-family: 'Vazirmatn', sans-serif; background-color: #1a202c; color: #e2e8f0; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #2d3748; }
+        ::-webkit-scrollbar-thumb { background: #4a5568; border-radius: 4px; }
+        .industrial-input { background-color: #2d3748; border: 1px solid #4a5568; color: #e2e8f0; border-radius: 0.375rem; padding: 0.5rem 0.75rem; transition: all 0.2s; }
+        .industrial-input:focus { outline: none; border-color: #4299e1; box-shadow: 0 0 0 2px rgba(66, 153, 225, 0.5); }
+        .industrial-btn { background-color: #3182ce; transition: background-color 0.3s; }
+        .sidebar-link.active { background-color: #4299e1; color: white; }
+        .glass-card { background: rgba(45, 55, 72, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+    </style>
+</head>
+<body class="overscroll-none">
+    <div id="app" class="flex h-screen overflow-hidden">
+        <aside class="w-72 bg-gray-900 p-4 overflow-y-auto shrink-0">
+            <div class="flex items-center mb-6"><i class="fas fa-cogs text-3xl text-blue-400 mr-3"></i><h1 class="text-xl font-bold text-white">SimSXCu Web</h1></div>
+            <nav id="scenario-nav"><h2 class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">پیکربندی‌ها</h2></nav>
+        </aside>
+
+        <main class="flex-1 flex flex-col bg-gray-800 overflow-hidden">
+            <header class="bg-gray-900/50 backdrop-blur-sm border-b border-gray-700 p-4 flex justify-between items-center shrink-0">
+                <h2 id="main-title" class="text-lg font-semibold">شبیه‌ساز استخراج حلالی مس</h2>
+                <div id="status-indicator" class="flex items-center space-x-2 space-x-reverse">
+                    <div id="status-dot" class="w-3 h-3 rounded-full bg-yellow-400 animate-pulse"></div>
+                    <span id="status-text" class="text-sm text-yellow-400">در حال بارگذاری موتور...</span>
+                </div>
+            </header>
+
+            <div class="flex-1 p-6 overflow-y-auto">
+                <div id="welcome-screen" class="flex flex-col items-center justify-center h-full text-center">
+                    <i class="fas fa-flask-vial text-7xl text-blue-500 mb-4"></i>
+                    <h3 class="text-2xl font-bold mb-2">SimSXCu - Digital Twin Edition</h3>
+                    <p class="text-gray-400 max-w-md">برای شروع، یک سناریو را انتخاب کنید. این نسخه شامل تمام ورودی‌های دقیق مدل اکسل می‌باشد.</p>
+                </div>
+                
+                <div id="simulation-dashboard" class="hidden">
+                    <div class="mb-6"><div id="options-tabs" class="inline-flex rounded-md shadow-sm bg-gray-900 p-1" role="group"></div></div>
+                    <div class="glass-card p-6 rounded-lg mb-6">
+                        <div class="flex items-center mb-4"><i class="fas fa-sliders-h text-blue-400 mr-3"></i><h3 class="text-lg font-semibold">پارامترهای ورودی (مطابق اعداد قرمز اکسل)</h3></div>
+                        <div id="input-fields" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-x-6 gap-y-4"></div>
+                        <div class="mt-6 flex justify-end">
+                            <button id="run-simulation-btn" class="industrial-btn text-white font-bold py-2 px-6 rounded-lg flex items-center" disabled>
+                                <i class="fas fa-play ml-2"></i><span id="btn-text">اجرای شبیه‌سازی</span><i id="loading-spinner" class="fas fa-spinner fa-spin ml-2 hidden"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <div id="results-area" class="grid grid-cols-1 lg:grid-cols-5 gap-6 hidden">
+                        <div id="results-container" class="lg:col-span-2 space-y-4"></div>
+                        <div class="lg:col-span-3 glass-card p-4 rounded-lg min-h-[400px]">
+                            <div id="mccabe-thiele-chart" class="w-full h-full"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        const dom = { nav: document.getElementById('scenario-nav'), title: document.getElementById('main-title'), welcome: document.getElementById('welcome-screen'), dashboard: document.getElementById('simulation-dashboard'), tabs: document.getElementById('options-tabs'), inputs: document.getElementById('input-fields'), runBtn: document.getElementById('run-simulation-btn'), btnText: document.getElementById('btn-text'), spinner: document.getElementById('loading-spinner'), resultsArea: document.getElementById('results-area'), resultsContainer: document.getElementById('results-container'), chart: document.getElementById('mccabe-thiele-chart'), status: { dot: document.getElementById('status-dot'), text: document.getElementById('status-text') } };
+        let activeScenario, activeOption;
+        let pyodide, runSimulationPython;
+
+        // This is the complete one-to-one mapping of ALL red-colored inputs from the Excel file.
+        const scenarios = {
+            'A': { name: "Series 2Ex1S", desc: "۲ استخراج، ۱ بازیافت (سری)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 2.5 }, { id: 'plsAc', label: 'PLS Ac', value: 1.6}, { id: 'sr', label: 'نسبت اشباع هدف', value: 92, unit: '%' }, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 92, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 30 }, { id: 'spAc', label: 'SP Ac', value: 190}, { id: 'adCu', label: 'AD Cu', value: 50}, {id: 'mef1s', label: 'راندمان S1', value: 98, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 2.5 }, { id: 'v_v', label: 'v/v%', value: 8.66, unit: '%' }, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 92, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 30 }, { id: 'spAc', label: 'SP Ac', value: 190}, { id: 'adCu', label: 'AD Cu', value: 50}, {id: 'mef1s', label: 'راندمان S1', value: 98, unit: '%'}] } }},
+            'B': { name: "Series 2Ex2S", desc: "۲ استخراج، ۲ بازیافت (سری)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 6.71 }, { id: 'plsAc', label: 'PLS Ac', value: 2}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%' }, { id: 'oaRatio', label: 'O/A استخراج', value: 1.1}, { id: 'mef1e', label: 'راندمان E1', value: 90, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 93, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35 }, { id: 'spAc', label: 'SP Ac', value: 190}, { id: 'adCu', label: 'AD Cu', value: 50}, { id: 'mef1s', label: 'راندمان S1', value: 94, unit: '%'}, { id: 'mef2s', label: 'راندمان S2', value: 80, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 6.8 }, { id: 'v_v', label: 'v/v%', value: 19.10, unit: '%' }, { id: 'oaRatio', label: 'O/A استخراج', value: 1.067}, { id: 'mef1e', label: 'راندمان E1', value: 91, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 92, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35 }, { id: 'spAc', label: 'SP Ac', value: 190}, { id: 'adCu', label: 'AD Cu', value: 50}, { id: 'mef1s', label: 'راندمان S1', value: 94, unit: '%'}, { id: 'mef2s', label: 'راندمان S2', value: 80, unit: '%'}] } }},
+            'C': { name: "Series 3Ex1S", desc: "۳ استخراج، ۱ بازیافت (سری)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 2.5}, { id: 'sr', label: 'نسبت اشباع هدف', value: 92, unit: '%' }, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 92, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 94, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 97, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 30}, { id: 'mef1s', label: 'راندمان S1', value: 98, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 2.5}, { id: 'v_v', label: 'v/v%', value: 9.22, unit: '%' }, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 92, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 94, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 97, unit: '%'}] } }},
+            'D': { name: "Series 3Ex2S", desc: "۳ استخراج، ۲ بازیافت (سری)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 12}, { id: 'sr', label: 'نسبت اشباع هدف', value: 92, unit: '%' }, { id: 'oaRatio', label: 'O/A استخراج', value: 1.5}, { id: 'mef1e', label: 'راندمان E1', value: 92, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 94, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 97, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'راندمان S1', value: 95, unit: '%'}, { id: 'mef2s', label: 'راندمان S2', value: 85, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 12}, { id: 'v_v', label: 'v/v%', value: 29.2, unit: '%' }, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 92, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 94, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 97, unit: '%'}] } }},
+            'E': { name: "Series-Parallel", desc: "۲ استخراج، ۱ موازی، ۱ بازیافت", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu1', label: 'PLS1 Cu', value: 7.0 }, { id: 'plsFlow1', label: 'PLS1 Flow', value: 400, unit: 'm³/h'}, { id: 'plsCu2', label: 'PLS2 Cu', value: 3.5 }, { id: 'plsFlow2', label: 'PLS2 Flow', value: 200, unit: 'm³/h'}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%' }, { id: 'oaRatio', label: 'O/A استخراج', value: 1.5}, { id: 'mef1e', label: 'راندمان E1', value: 92, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 97, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'راندمان S1', value: 98, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu1', label: 'PLS1 Cu', value: 3.74}, { id: 'plsFlow1', label: 'PLS1 Flow', value: 140, unit: 'm³/h'}, { id: 'v_v', label: 'v/v%', value: 26.67, unit: '%' }, { id: 'oaRatio', label: 'O/A استخراج', value: 1.29}] } }},
+            'F': { name: "Series-Parallel 2Ex1Px2S", desc: "۲ استخراج، ۱ موازی، ۲ بازیافت", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'راندمان S1', value: 95, unit: '%'}, { id: 'mef2s', label: 'راندمان S2', value: 95, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'v_v', label: 'v/v%', value: 20.21, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}] } }},
+            'G': { name: "Optimum Series-Parallel", desc: "بهینه سری-موازی (۱-۱-۱-۱)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef2e', label: 'Mixer Eff E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'Mixer Eff E3', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'Mixer Eff S1', value: 95, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'v_v', label: 'v/v%', value: 23.30, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}] } }},
+            'H': { name: "Optimum Series-Parallel", desc: "بهینه سری-موازی (۱-۱-۱-۲)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef2e', label: 'Mixer Eff E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'Mixer Eff E3', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'Mixer Eff S1', value: 95, unit: '%'}, { id: 'mef2s', label: 'Mixer Eff S2', value: 95, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'v_v', label: 'v/v%', value: 21.19, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}] } }},
+            'I': { name: "Triple Parallel", desc: "موازی سه‌گانه (۱-۱-۱-۱)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 1.0}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef2e', label: 'Mixer Eff E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'Mixer Eff E3', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'Mixer Eff S1', value: 95, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 1.0}, { id: 'v_v', label: 'v/v%', value: 24.18, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}] } }},
+            'J': { name: "Triple Parallel", desc: "موازی سه‌گانه (۱-۱-۱-۲)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 2.5}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef2e', label: 'Mixer Eff E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'Mixer Eff E3', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'Mixer Eff S1', value: 95, unit: '%'}, { id: 'mef2s', label: 'Mixer Eff S2', value: 95, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 2.5}, { id: 'v_v', label: 'v/v%', value: 19.89, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}] } }},
+            'K': { name: "Interlaced", desc: "درهم‌تنیده (۱-۱-۱-۱-۱)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 5.0}, { id: 'sr', label: 'نسبت اشباع هدف', value: 90, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 95, unit: '%'}, { id: 'mef4e', label: 'راندمان E4', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'Mixer Eff S1', value: 95, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'v_v', label: 'v/v%', value: 27.15, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}] } }},
+            'L': { name: "Interlaced", desc: "درهم‌تنیده (۱-۱-۱-۱-۲)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 95, unit: '%'}, { id: 'mef4e', label: 'راندمان E4', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'Mixer Eff S1', value: 95, unit: '%'}, { id: 'mef2s', label: 'Mixer Eff S2', value: 95, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'v_v', label: 'v/v%', value: 21.19, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}] } }},
+            'M': { name: "Double Series-Parallel", desc: "سری-موازی دوگانه (۲-۲-۱)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 95, unit: '%'}, { id: 'mef4e', label: 'راندمان E4', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'Mixer Eff S1', value: 95, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'v_v', label: 'v/v%', value: 21.62, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}] } }},
+            'N': { name: "Double Series-Parallel", desc: "سری-موازی دوگانه (۲-۲-۲)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 95, unit: '%'}, { id: 'mef4e', label: 'راندمان E4', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'Mixer Eff S1', value: 95, unit: '%'}, { id: 'mef2s', label: 'Mixer Eff S2', value: 95, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 3.74}, { id: 'v_v', label: 'v/v%', value: 19.81, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}] } }},
+            'O': { name: "Optimum Triple Parallel", desc: "بهینه موازی سه‌گانه (۱-۱-۱-۱-۱)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 2.5}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 95, unit: '%'}, { id: 'mef4e', label: 'راندمان E4', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'Mixer Eff S1', value: 95, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 2.5}, { id: 'v_v', label: 'v/v%', value: 22.99, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}] } }},
+            'P': { name: "Optimum Triple Parallel", desc: "بهینه موازی سه‌گانه (۱-۱-۱-۱-۲)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu1', label: 'PLS1 Cu', value: 2.5}, { id: 'plsFlow1', label: 'PLS1 Flow', value: 150, unit:'m³/h'}, { id: 'plsCu2', label: 'PLS2 Cu', value: 2.5}, { id: 'plsFlow2', label: 'PLS2 Flow', value: 300, unit:'m³/h'}, { id: 'plsCu3', label: 'PLS3 Cu', value: 2.5}, { id: 'plsFlow3', label: 'PLS3 Flow', value: 150, unit:'m³/h'}, { id: 'sr', label: 'نسبت اشباع هدف', value: 85, unit: '%' }, { id: 'oaRatio', label: 'O/A استخراج', value: 2.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef4e', label: 'راندمان E4', value: 98, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'spAc', label: 'SP Ac', value: 190}, { id: 'adCu', label: 'AD Cu', value: 45}, { id: 'mef1s', label: 'راندمان S1', value: 98, unit: '%'}, { id: 'mef2s', label: 'راندمان S2', value: 98, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu1', label: 'PLS1 Cu', value: 2.5}, { id: 'v_v', label: 'v/v%', value: 18.74, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 2.0}] } }},
+            'Q': { name: "Organic Bypass", desc: "بای‌پس آلی (۲-۲-۱)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 6.71}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 95, unit: '%'}, { id: 'mef4e', label: 'راندمان E4', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'Mixer Eff S1', value: 95, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu', label: 'PLS Cu', value: 6.71}, { id: 'v_v', label: 'v/v%', value: 25.40, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}] } }},
+            'R': { name: "Organic Bypass", desc: "بای‌پس آلی (۲-۲-۲)", options: {
+                1: { name: "بهینه‌سازی v/v%", fields: [ { id: 'plsCu1', label: 'PLS1 Cu', value: 6.71}, { id: 'sr', label: 'نسبت اشباع هدف', value: 80, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}, { id: 'mef1e', label: 'راندمان E1', value: 95, unit: '%'}, { id: 'mef2e', label: 'راندمان E2', value: 95, unit: '%'}, { id: 'mef3e', label: 'راندمان E3', value: 95, unit: '%'}, { id: 'mef4e', label: 'راندمان E4', value: 95, unit: '%'}, { id: 'spCu', label: 'SP Cu', value: 35}, { id: 'mef1s', label: 'Mixer Eff S1', value: 95, unit: '%'}, { id: 'mef2s', label: 'Mixer Eff S2', value: 95, unit: '%'}] },
+                2: { name: "محاسبه کارخانه", fields: [ { id: 'plsCu1', label: 'PLS1 Cu', value: 6.71}, { id: 'v_v', label: 'v/v%', value: 22.15, unit: '%'}, { id: 'oaRatio', label: 'O/A استخراج', value: 1.0}] } }},
+        };
+
+        // --- Standard App Logic (No major changes needed below) ---
+        function setEngineStatus(isReady, message) {
+            dom.status.dot.className = `w-3 h-3 rounded-full ${isReady ? 'bg-green-500' : 'bg-yellow-400 animate-pulse'}`;
+            dom.status.text.textContent = message;
+            dom.status.text.className = `text-sm ${isReady ? 'text-green-400' : 'text-yellow-400'}`;
+            dom.runBtn.disabled = !isReady;
+             if(isReady) dom.runBtn.classList.remove('animate-pulse');
+        }
+
+        async function initializeApp() {
+            setEngineStatus(false, 'در حال بارگذاری موتور پایتون...');
+            try {
+                pyodide = await loadPyodide();
+                setEngineStatus(false, 'در حال بارگذاری کتابخانه‌ها...');
+                await pyodide.loadPackage(['numpy', 'scipy']);
+
+                setEngineStatus(false, 'در حال بارگذاری کد بک‌اند...');
+                const backendCode = await (await fetch('./backend.py')).text();
+                pyodide.runPython(backendCode);
+                runSimulationPython = pyodide.globals.get('run_simulation_from_js');
+
+                setEngineStatus(true, 'موتور شبیه‌ساز آماده است');
+            } catch (error) {
+                console.error("Pyodide initialization failed:", error);
+                setEngineStatus(false, 'خطا در بارگذاری موتور');
+                dom.status.dot.className = 'w-3 h-3 rounded-full bg-red-500';
+                dom.status.text.className = 'text-sm text-red-400';
+            }
+
+            const scenarioKeys = "ABCDEFGHIJKLMNOPQR".split('');
+            scenarioKeys.forEach(key => {
+                if (!scenarios[key]) { // Create placeholder for un-defined scenarios
+                     scenarios[key] = { name: `Scenario ${key}`, desc: `Configuration ${key}`, options: {1:{name:'Option 1', fields:[]}, 2:{name:'Option 2', fields:[]}}};
+                }
+                const link = document.createElement('a');
+                link.href = '#'; link.className = 'sidebar-link block py-2 px-4 mb-1 rounded-md text-gray-300 hover:bg-gray-700 transition-colors';
+                link.textContent = `${key}: ${scenarios[key].name}`; link.dataset.scenario = key;
+                link.addEventListener('click', e => { e.preventDefault(); loadScenario(key); });
+                dom.nav.appendChild(link);
+            });
+            dom.runBtn.addEventListener('click', handleRunSimulation);
+        }
+
+        function loadScenario(id) {
+            activeScenario = id; const scenario = scenarios[id];
+            dom.welcome.classList.add('hidden'); dom.dashboard.classList.remove('hidden');
+            dom.title.textContent = `پیکربندی ${id}: ${scenario.desc}`;
+            document.querySelectorAll('.sidebar-link').forEach(l => l.classList.toggle('active', l.dataset.scenario === id));
+            dom.tabs.innerHTML = '';
+            Object.keys(scenario.options).forEach((optKey, i) => {
+                const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = scenario.options[optKey].name;
+                btn.dataset.option = optKey; btn.className = `px-4 py-2 text-sm font-medium transition-colors ${ i === 0 ? 'rounded-r-md' : ''} ${ i === Object.keys(scenario.options).length -1 ? 'rounded-l-md' : ''}`;
+                btn.addEventListener('click', () => loadOption(optKey)); dom.tabs.appendChild(btn);
+            });
+            loadOption(Object.keys(scenario.options)[0]);
+        }
+        function loadOption(id) {
+            activeOption = id; const option = scenarios[activeScenario].options[id];
+            dom.tabs.querySelectorAll('button').forEach(btn => {
+                const isActive = btn.dataset.option === id;
+                btn.className = `px-4 py-2 text-sm font-medium transition-colors ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'}`;
+                 if (btn.nextSibling) btn.classList.add('rounded-r-md'); if(btn.previousSibling) btn.classList.add('rounded-l-md');
+            });
+            dom.inputs.innerHTML = '';
+            if (option.fields.length === 0) {
+                 dom.inputs.innerHTML = `<p class="text-gray-400 col-span-full">ورودی‌های دقیق برای این سناریو هنوز تعریف نشده‌اند.</p>`;
+                 return;
+            }
+            option.fields.forEach(f => {
+                const unit = f.unit || 'g/L';
+                const fieldHTML = `<div class="flex flex-col"><label for="${f.id}" class="text-sm text-gray-400 mb-1">${f.label}</label><div class="flex items-center"><input type="number" id="${f.id}" value="${f.value}" step="0.01" class="industrial-input w-full text-left dir-ltr">${unit ? `<span class="mr-2 text-gray-400 text-sm">${unit}</span>` : ''}</div></div>`;
+                dom.inputs.innerHTML += fieldHTML;
+            });
+            dom.resultsArea.classList.add('hidden');
+        }
+        async function handleRunSimulation() {
+            dom.btnText.textContent = 'در حال محاسبه...'; dom.spinner.classList.remove('hidden'); dom.runBtn.disabled = true;
+            const inputValues = {};
+            scenarios[activeScenario].options[activeOption].fields.forEach(f => { inputValues[f.id] = parseFloat(document.getElementById(f.id).value); });
+            try {
+                const payload = JSON.stringify({ scenario: activeScenario, option: activeOption, inputs: inputValues });
+                const resultProxy = runSimulationPython(payload);
+                const data = resultProxy.toJs({ dict_converter: Object.fromEntries });
+                resultProxy.destroy();
+
+                if (data.error) throw new Error(data.error);
+                displayResults(data);
+            } catch (e) {
+                alert(`خطا در شبیه‌سازی: ${e.message}`);
+            } finally {
+                dom.btnText.textContent = 'اجرای شبیه‌سازی'; dom.spinner.classList.add('hidden');
+                setEngineStatus(true, 'موتور شبیه‌ساز آماده است');
+            }
+        }
+        function displayResults({ results, chartData }) {
+            dom.resultsContainer.innerHTML = '';
+            results.forEach(item => {
+                const icon = item.label.includes('راندمان') ? 'fa-percent' : item.label.includes('ظرفیت') ? 'fa-battery-full' : 'fa-chart-line';
+                const card = `<div class="glass-card flex justify-between items-center p-4 rounded-lg"><div><p class="text-sm text-gray-400">${item.label}</p><p class="text-2xl font-bold text-white">${item.value} <span class="text-base font-normal text-gray-300">${item.unit}</span></p></div><div class="bg-blue-500/20 text-blue-300 rounded-full h-10 w-10 flex items-center justify-center"><i class="fas ${icon}"></i></div></div>`;
+                dom.resultsContainer.innerHTML += card;
+            });
+            drawChart(chartData); dom.resultsArea.classList.remove('hidden');
+        }
+        function drawChart(data) {
+            const layout = { title: 'نمودار مک‌کیب-تیل', paper_bgcolor: 'transparent', plot_bgcolor: 'rgba(255, 255, 255, 0.05)', font: { family: 'Vazirmatn, sans-serif', color: '#e2e8f0' }, xaxis: { title: 'غلظت مس در فاز آبی (g/L)', gridcolor: 'rgba(255, 255, 255, 0.1)' }, yaxis: { title: 'غلظت مس در فاز آلی (g/L)', gridcolor: 'rgba(255, 255, 255, 0.1)' }, legend: { x: 0.05, y: 0.95, bgcolor: 'rgba(0,0,0,0.3)'}, margin: { l: 60, r: 30, b: 50, t: 50 } };
+            const traces = [ { x: data.eq_x, y: data.eq_y, mode: 'lines', name: 'خط تعادل', line: { color: '#4299e1', width: 3 } }, { x: data.op_x, y: data.op_y, mode: 'lines+markers', name: 'خط عملیاتی', line: { color: '#68d391', width: 2, dash: 'dash' }, marker: { color: '#68d391', size: 8 } } ];
+            Plotly.newPlot(dom.chart, traces, layout, {responsive: true});
+        }
+        document.addEventListener('DOMContentLoaded', initializeApp);
+    </script>
+</body>
+</html>
